@@ -1,0 +1,216 @@
+---
+title: "Metadata of Global metagenomes"
+output: html_notebook
+---
+
+# Init
+```{r}
+# Libraries
+library(tidyverse)
+library(vroom)
+library(janitor)
+library(tableone)
+
+# Misc
+library(countrycode)
+library(maps)
+library(viridis)
+library(cowplot)
+```
+
+# Var
+## Folders
+```{r}
+base_dir = "/ebio/abt3_projects/columbian_gut_metagenome/code/host_metadata/notebooks"
+fig_dir = file.path(base_dir, "Figures")  
+```
+
+```{r}
+# Load metadata tables
+GM_CurMetDat_raw = "/ebio/abt3_projects/small_projects/jdelacuesta/public_data_retrieval/CurMetDat-metagenomes/files/metadata/Filtered_CurMetDat.tsv" %>% 
+  vroom()
+
+GM_LLMGP = "/ebio/abt3_projects/databases_no-backup/curatedMetagenomicData/global_metagenomes/combined_GTDBr86/configs/combined_samples.txt" %>% 
+  vroom() %>% 
+  filter(!str_detect(Sample, "^#"))
+
+GM_HuBif_raw = readxl::read_excel("/ebio/abt3_projects/columbian_gut_metagenome/data/metadata/HuBif_metadata_database_2020_01_31.xlsx")
+
+```
+
+```{r}
+# Organize tables
+
+# HuBif Metadata
+# Pull participants with metagenome data
+GM_Hubif_samples = GM_LLMGP %>% 
+  filter(str_detect(Read1, "HUBIF")) %>% 
+  pull(Sample)
+
+# Select columns and transform data
+GM_HuBif_metadata = GM_HuBif_raw %>% 
+  filter(ParticipantID %in% GM_Hubif_samples) %>% 
+  select(Sample = ParticipantID, 
+         age = Age_years, 
+         antibiotics_current_use = CurrAntibiotics, 
+         antibiotics_previous_use = PrevAntibiotics, 
+         country = CurrCountry, 
+         BMI, 
+         waist_circumference = WaistCircumference, 
+         smoker = Smoker, 
+         systolic_p = Systolic, 
+         diastolic_p = Diastolic,
+         cholesterol = Cholesterol, 
+         hdl = HDLCholesterol, 
+         ldl = LDLCholesterol, 
+         triglycerides = Triglycerides) %>% 
+  mutate_at(c("systolic_p", "cholesterol", "hdl", "triglycerides"), function(x) case_when(str_detect(x,"[\\/\\>\\<]")~"", TRUE ~ x)) %>% 
+  mutate_at(c("systolic_p", "cholesterol", "hdl", "triglycerides"), function(x) as.numeric(x)) %>% 
+  mutate(dataset_name = "HuBif", 
+         gender = "female",
+         smoker = as.character(smoker), 
+         smoker = case_when(smoker == 1 ~ "yes", smoker == 0 ~ "no", TRUE ~ smoker), 
+         antibiotics_current_use = as.character(antibiotics_current_use), 
+         antibiotics_current_use = case_when(antibiotics_current_use == 1 ~ "yes", antibiotics_current_use == 0 ~ "no", TRUE ~ antibiotics_current_use),
+         country = case_when(country == "France" ~ "FRA",
+                             country == "Gabon" ~ "GAB",
+                             country == "Germany" ~ "DEU",
+                             country == "Italy" ~ "ITA",
+                             country == "Switzerland" ~ "CHE",
+                             country == "USA" ~ "USA",
+                             country == "Vietnam" ~ "VNM", 
+                             TRUE ~ country)) %>% 
+  filter(antibiotics_current_use == "no" | is.na(antibiotics_current_use))
+
+# Visconti data
+GM_Visconti_metadata = GM_LLMGP %>% 
+  filter(str_detect(Read1, "Visconti2019")) %>% 
+  mutate(dataset_name = "Visconti_2019", 
+         country = "GBR") %>% 
+  select(-Notes, -Read1)
+
+# Curated metagenome data
+GM_CurMetDat_samples = GM_LLMGP %>% 
+  filter(!(Sample %in% GM_Visconti_metadata$Sample) & !(Sample %in% GM_Hubif_samples)) %>% 
+  pull(Sample)
+  
+GM_CurMetDat_metadata = GM_CurMetDat_raw %>% 
+  filter(sampleID %in% GM_CurMetDat_samples) %>% 
+  rename("Sample" = "sampleID")
+
+# Combine tables
+GM_metadata_full = full_join(GM_HuBif_metadata, GM_Visconti_metadata,  
+                        by = c("Sample", "country", "dataset_name")) %>% 
+  full_join(GM_CurMetDat_metadata, ., 
+            by = c("dataset_name", "Sample", "antibiotics_current_use", "age", "country", "BMI", "hdl", "triglycerides", "ldl", "cholesterol", "systolic_p", "smoker", "gender"))
+
+```
+
+
+
+
+```{r}
+# Trim down the complete table to variables of interest
+columns_keept = c("dataset_name", "Sample", "subjectID",  "disease", "age", "gender", "country", "non_westernized", "BMI", "alcohol", "disease_subtype", "hdl", "triglycerides", "hba1c", "ldl", "family", "cholesterol", "glucose", "adiponectin", "hscrp", "leptin", "glutamate_decarboxylase_2_antibody", "creatinine", "stool_texture", "location", "dyastolic_p", "systolic_p", "creatine", "albumine", "bilubirin", "smoker", "ever_smoker", "birth_control_pil", "c_peptide", "insulin_cat")
+
+cont_vars = c("age", "BMI", "hdl", "triglycerides", "hba1c", "ldl", "cholesterol", "glucose", "adiponectin", "hscrp", "leptin", "glutamate_decarboxylase_2_antibody", "creatinine", "dyastolic_p", "systolic_p", "creatine", "albumine", "bilubirin", "c_peptide")
+
+cat_vars = setdiff(columns_keept, cont_vars)
+
+GM_metadata_sel = GM_metadata_full %>% 
+  #filter(dataset_name != "Visconti_2019") %>% 
+  select(columns_keept) %>% 
+  mutate_at(cat_vars, function(x) as.factor(x)) 
+
+write_delim(GM_metadata_sel,
+            "/ebio/abt3_projects/databases_no-backup/curatedMetagenomicData/global_metagenomes/metadata/Global_metagenomes_Metadata.csv", 
+            delim = "\t")
+```
+
+```{r fig.width=12, fig.height=7}
+complete_data = GM_metadata_sel %>% 
+  map_df(function(x) tabyl(is.na(x))) %>% 
+  as.data.frame()
+
+colnames(complete_data) = c("Unavailable", "n", "percent")
+
+complete_data_n = complete_data %>% 
+  filter(Unavailable == F) %>% 
+  rename("Variable" = "Unavailable") %>% 
+  mutate(Variable = colnames(GM_metadata_sel),
+         Variable = fct_reorder(Variable, n)) 
+
+Country_samples = GM_metadata_sel %>% 
+  count(country) %>% 
+  mutate(country =  countrycode(country, origin = "genc3c", destination = "country.name"),
+         country = fct_reorder(country, n))
+
+N_completedata = complete_data_n %>% 
+  ggplot(aes(x = Variable, y = n)) + 
+  geom_col() +
+  theme_light() +
+  coord_flip()
+
+N_study = GM_metadata_sel %>% 
+  count(dataset_name) %>% 
+  mutate(dataset_name = fct_reorder(dataset_name, n)) %>% 
+  ggplot(aes(x = dataset_name, y = n)) +
+    geom_col() +
+    theme_light() +
+    coord_flip()
+
+N_country = Country_samples  %>% 
+  drop_na() %>% 
+  ggplot(aes(x = country, y = n)) +
+    geom_col() +
+    theme_light() +
+    coord_flip()
+
+GM_available_data = plot_grid(N_study, N_completedata, N_country, nrow = 1, rel_widths = c(1, 1.25, 0.95))
+
+save_plot(file.path(fig_dir, "GM_available_data.png"), GM_available_data, base_width = 12, base_height = 7)
+```
+
+```{r}
+Country_samples = GM_metadata_sel %>% 
+  count(country) %>% 
+  mutate(country =  case_when(country == "USA" ~ "USA",
+                              TRUE ~ countrycode(country, origin = "genc3c", destination = "country.name")))
+
+world_map = map_data("world") %>% 
+  left_join(Country_samples, by = c("region" = "country")) %>% 
+  mutate(Included = !is.na(n))
+
+
+GM_map = ggplot(world_map, aes(long, lat, group = group)) +
+  geom_polygon(aes(fill = Included), color = "white") +
+  theme_minimal() +
+  #scale_fill_manual(c("red", "green", "black"))
+  scale_fill_manual(values = c("grey90", "salmon")) +
+  theme(panel.background = element_rect(fill = "aliceblue"), 
+        axis.ticks = element_blank(), 
+        axis.text = element_blank(), 
+        legend.position = c(.10,.36), 
+        legend.background = element_blank(),
+        legend.key = element_blank())
+
+GM_map
+
+save_plot(file.path(fig_dir, "GM_map.png"), GM_map)
+```
+
+
+```{r}
+GM_metadata_sel %>% count(country) 
+GM_metadata_sel %>% count(dataset_name) 
+```
+
+
+```{r}
+all_vars = c("dataset_name", "age", "gender", "country", "BMI")
+cat_vars = c("dataset_name", "gender", "country")
+GM_metadata_sel %>% 
+  select(Sample, dataset_name, age, gender, country, BMI) %>% 
+  drop_na %>% 
+  CreateTableOne(data = ., vars = all_vars, factorVars = cat_vars)
+```
