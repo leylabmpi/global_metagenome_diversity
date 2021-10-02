@@ -1,23 +1,25 @@
-Welcome to your new project. This document explains the directory
-tree structure that has been set up for you. We encourage you to keep
-this stucture.
+# Summary
 
-data/
-        * Intended for raw data and results. Backed up regularly. Do
-          not store any intermediate files here. See tmp below.
-tmp/
-        * All intermediate files, data that could be recreated easily,
-          and data that do not need to be backed up.
-code/
-        * We recommend to separate data from code, hence this directory.
-          In addition, it is considered a good idea to keep source code
-          under version control, so this directory is already initialized
-          for git usage.
-doc/
-        * Documentation of your project data and code.
+Retrieval and analysis of metagenome data from public sources.
+See https://researchparasite.com/ for why this repo is called **LLPAR**
 
-Please look at our user-info web pages for further information:
+* Authors
+  * Jacobo de la Cuesta-Zuluaga (started December 2019)
+  * Nick Youngblut
+* Maintainers
+  * Jacobo de la Cuesta-Zuluaga (started December 2019)
+  * Nick Youngblut
 
-	http://ilm.eb.local/gitweb/?p=user-info;a=tree
+# Description
 
-Questions: Please contact your system administrator.
+This repo contains files and notebooks to i) retrieve publicly available sequence data ii) analyses the data 
+
+## Data retrieval
+
+Retrieve data of publicly available sequence repositories or packages containing such data. The `mgnify-metagenomes` folder contains code to retrieve environmental and host associated metagnomes from the MGnify platform of EBI-EMBL. The CurMetDat-metagenomes contains code and files to retrieve metagenomes from the `curatedMetagenomicData` package of `R` from the Waldron lab.
+
+The data can then be formated and used with the Ley Lab Metagenome QC pipeline `LLMGQC` to download and quality check.
+
+## Data analyses
+
+See ./ipynb/ for Jupyter notebooks 
