@@ -2,7 +2,7 @@
 
 Code and notes associated with the study:
 
-> Youngblut et al. Incorporating genome-based phylogeny and functional similarity into diversity assessments helps to resolve a global collection of human gut metagenomes. Submitted. 
+> Nicholas D. Youngblut, Jacobo de la Cuesta-Zuluaga, Ruth E. Ley. Incorporating genome-based phylogeny and functional similarity into diversity assessments helps to resolve a global collection of human gut metagenomes. bioRxiv. https://doi.org/10.1101/2020.07.16.207845
 
 ## Data retrieval
 
