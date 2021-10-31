@@ -20,5 +20,6 @@ code/archive/
 Rproj/
 envs/
 renv/
+archive/
 renv.lock
 *-checkpoint.ipynb

@@ -1,0 +1,59 @@
+---
+title: "Run the LLMGQC pipeline"
+output: html_notebook
+---
+
+# Init
+```{r}
+library(tidyverse)
+library(glue)
+```
+
+# Modify LLCOMP config files
+```{r}
+configs_dir = list.files("/ebio/abt3_scratch/jdelacuesta/unspring/configs", full.names = T)
+study_names = basename(configs_dir) %>% 
+  str_remove_all("\\.yaml")
+```
+
+```{r}
+
+sed_command = "sed -i -e 's@output_dir: /ebio/abt3_projects/databases_no-backup/curatedMetagenomicData/global_metagenomes/LLMGQC@output_dir: /ebio/abt3_scratch/jdelacuesta/unspring/reads@' -e 's@samples_file:@#samples_file:@' -e 's@##samples_file:@samples_file:@' -e 's@rm_input_reads: True@rm_input_reads: False@' -e 's@/tmp/global2/@/ebio/abt3_scratch/@' {config_file}"
+
+sed_commands = map_chr(configs_dir, function(x) glue(sed_command, config_file = x))
+
+#map(sed_commands, function(x) system(x))
+```
+
+# Create uncompress commands
+
+```{r}
+# Pipeline dir
+pipeline_folder = "/ebio/abt3_projects/small_projects/jdelacuesta/CurMetDat/llcomp"
+```
+
+
+## Snakemake command
+```{r}
+# Study to uncompress
+config_file = configs_dir[1]
+config_file
+
+# Command
+conda_env = 'conda activate snakemake'
+SGE_out_dir = file.path(pipeline_folder, "tmp/SGE_out")
+comp_cmd = "cd {llcomp}; {conda_env}; screen -L -S llcomp {exe} {config} {jobs} --keep-going --rerun-incomplete --dryrun"
+comp_job = glue(comp_cmd, 
+              conda_env = conda_env, 
+              llcomp = pipeline_folder, 
+              exe = './snakemake_sge.sh', 
+              config = config_file,
+              jobs = 30)
+comp_job 
+```
+
+# See uncompressed
+```{r}
+list.dirs("/ebio/abt3_scratch/jdelacuesta/unspring/reads")
+```
+

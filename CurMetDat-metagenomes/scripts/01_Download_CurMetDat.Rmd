@@ -1,0 +1,45 @@
+---
+title: "Download Curated Metagenomic Data"
+output: html_notebook
+---
+
+Jacobo de la Cuesta-Zuluaga. December 2019.
+
+The aim of this notebook is to obtain the latest samples from the `curatedMetagenomicData` package, filter it and prepare tables for download using the LLMGQC pipeline.
+
+*Note* that this notebook is using the development version of `curatedMetagenomicData` and **requires the development version of `R`, i.e. `v.4.0`**
+
+# Lib
+```{r message=FALSE}
+library(curatedMetagenomicData)
+library(tidyverse)
+```
+
+# Init
+```{r}
+# Work dir
+work_dir = "/ebio/abt3_projects/small_projects/jdelacuesta/public_data_retrieval/CurMetDat-metagenomes"
+```
+
+# Curated metagenome data
+The complete metadata table is stored in a df called `combined_metadata`.
+
+## Explore full metadata
+```{r}
+# Head
+combined_metadata %>% head
+```
+
+```{r}
+# Studies and number of samples per study
+combined_metadata %>% count(dataset_name)
+```
+
+# Export files
+```{r}
+dir.create(file.path(work_dir, "files"))
+# Complete CurMetDat data frame
+write_tsv(combined_metadata, file.path(work_dir, "files", "Complete_CurMetDat.tsv")) 
+```
+
+

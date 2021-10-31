@@ -1,0 +1,272 @@
+---
+title: "Filter Curated Metagenomic Data"
+output: html_notebook
+---
+
+# Lib
+```{r}
+library(skimr)
+library(tidyverse)
+```
+
+# Init
+```{r}
+# Work dir
+work_dir = "/ebio/abt3_projects/small_projects/jdelacuesta/public_data_retrieval/CurMetDat-metagenomes"
+
+# Load metadata
+combined_metadata_raw = read_tsv(file.path(work_dir, "files/metadata", "Complete_CurMetDat.tsv")) 
+combined_metadata_raw %>% head
+
+# Taichi's coevolution metadata
+coevo_dir = "/ebio/abt3_projects/databases_no-backup/Taichi_h-m-coevo/LLMGQC"
+coevo_metadata = read_tsv(file.path(coevo_dir, "individuals.tsv"))
+coevo_metadata %>% head
+```
+
+# Adjust metadata table
+Given that there are samples duplicated from the metahit studies (i.e. `LeChatelierE_2013` and `NielsenHB_2014`), but Nielsen has better metadata than Le Chatelier, I will combine them to get SRA info from Le Chatelier but metadata of Nielsen in samples that overlap.
+
+```{r}
+# Add columns with number of duplicated in samples and subjects
+combined_metadata_tmp = combined_metadata_raw %>% 
+  group_by(subjectID) %>% 
+  mutate(subject_n = row_number(subjectID)) %>% 
+  ungroup() %>% 
+  group_by(sampleID) %>% 
+  mutate(samp_n = row_number(sampleID)) %>% 
+  ungroup() 
+
+# Make sure all other metadata is the same between studies
+combined_metadata_tmp %>% 
+  filter(dataset_name %in% c("NielsenHB_2014", "LeChatelierE_2013")) %>% 
+  arrange(subjectID)
+
+# Split DF in unique or shared samples by studies
+# LeChatelier complete
+combined_metadata_LC = combined_metadata_tmp %>% 
+  filter(dataset_name %in% c("LeChatelierE_2013")) 
+
+# Nielsen Shared
+combined_metadata_Nsh = combined_metadata_tmp %>% 
+  filter(dataset_name %in% c("NielsenHB_2014"), sampleID %in% combined_metadata_LC$sampleID)
+
+# Nielsen Unique
+combined_metadata_Nun = combined_metadata_tmp %>% 
+  filter(dataset_name %in% c("NielsenHB_2014"), !(sampleID %in% combined_metadata_LC$sampleID))
+
+# Le Chatelier shared
+combined_metadata_LCsh = combined_metadata_tmp %>% 
+  filter(dataset_name %in% c("LeChatelierE_2013"), sampleID %in% combined_metadata_Nsh$sampleID)
+
+# Le Chatelier Unique
+combined_metadata_LCun = combined_metadata_tmp %>% 
+  filter(dataset_name %in% c("LeChatelierE_2013"), !(sampleID %in% combined_metadata_Nsh$sampleID)) 
+
+# Make sure all samples overlap between shared tables
+all(combined_metadata_LCsh$subjectID %in% combined_metadata_Nsh$subjectID)
+
+# Replace missing metadata in Le Chatelier table
+combined_metadata_LCN = combined_metadata_LCsh %>% 
+  mutate(age = combined_metadata_Nsh$age, 
+         antibiotics_current_use = combined_metadata_Nsh$antibiotics_current_use,
+         disease = combined_metadata_Nsh$disease, 
+         mgs_richness = combined_metadata_Nsh$mgs_richness)
+
+# Combined all tables into a single MetaHit table
+combined_metadata_MH = bind_rows(combined_metadata_LCN, combined_metadata_Nun) %>% 
+  bind_rows(., combined_metadata_LCun) 
+
+# Metadata without metahit studies
+combined_metadata_noMH = combined_metadata_tmp %>% 
+  filter(!(dataset_name %in% c("LeChatelierE_2013",  "NielsenHB_2014")))
+
+# Final metadata table
+combined_metadata = bind_rows(combined_metadata_MH, combined_metadata_noMH) %>% 
+  arrange(dataset_name)
+
+combined_metadata %>% head
+```
+
+
+# Filter metadata table
+I will perform an initial filtering of filter the table to retain stool samples from non-children (i.e. adults or seniors) not consuming antibiotics without infectious diseases. 
+```{r}
+# Filter by inclusion criteria
+# Remove columns with NAs
+filtered_metadata = combined_metadata %>% 
+  filter(body_site == "stool", 
+         age_category %in% c("adult", "senior"),
+         age >= 18 | is.na(age),
+         antibiotics_current_use == "no" | is.na(antibiotics_current_use),
+         pregnant == "no" | is.na(pregnant),
+         pregnant == "no" | is.na(lactating),
+         !(disease %in% c("gangrene", "pneumonia", "cellulitis")),
+         median_read_length >= 95,
+         !is.na(NCBI_accession),
+         !(study_condition %in% c("adenoma", "CRC", "AS", "BD", "cirrhosis", "IBD"))) %>%
+  select_if(function(x) !all(is.na(x))) 
+
+# Number of samples
+filtered_metadata %>% dim
+```
+
+## Descriptive stats of the filtered data
+```{r}
+# Descriptive stats of each variable
+summary_samples = filtered_metadata %>% skim()
+summary_samples
+```
+
+```{r}
+# Subject with multiple samples
+repeated_subjects = filtered_metadata %>% 
+  count(subjectID) %>% 
+  arrange(-n) %>% 
+  filter(n > 1) %>% 
+  pull(subjectID)
+
+repeated_metadata = combined_metadata %>% 
+  filter(subjectID %in% repeated_subjects)
+
+repeated_metadata %>% head
+```
+
+```{r}
+# Samples by sex
+filtered_metadata %>% group_by(gender) %>% summarise(n_samples = n())
+
+# Samples by country
+filtered_metadata %>% group_by(country) %>% summarise(n_samples = n())
+
+# Samples by country
+filtered_metadata %>% group_by(dataset_name) %>% summarise(n_samples = n())
+
+# Samples by age
+filtered_metadata %>% mutate(age = round(age, 0)) %>% group_by(age) %>% summarise(n_samples = n())
+```
+
+## Create data frame for LLMGQC
+```{r}
+n_accessions = filtered_metadata %>% 
+  transmute(sampleID, n_accessions = str_count(NCBI_accession, "\\;") + 1) %>% 
+  pull(n_accessions) %>%
+  max()
+
+accesison_cols = glue::glue("accession_{n}", n = 1:n_accessions)
+
+raw_samplesfile = filtered_metadata %>% 
+  select(sampleID, NCBI_accession) %>% 
+  separate(NCBI_accession, into = accesison_cols, sep = ";") %>% 
+  gather(Accession_n, Accession, -sampleID) %>% 
+  na.omit() %>% 
+  arrange(sampleID)
+
+raw_samplesfile %>% head
+
+samplesfile = raw_samplesfile %>% 
+  mutate(Sample = sampleID, Run = seq(1, nrow(raw_samplesfile)), Lane = rep(1, nrow(raw_samplesfile)), Remote = Accession) %>% 
+  select(Sample, Run, Lane, Remote)
+
+samplesfile
+```
+
+# Compare with Taichi's data
+```{r}
+coevo_metadata %>% head
+```
+
+```{r}
+# Samples not downloaded in Taichi's project
+final_samplesfile = samplesfile %>% 
+  filter(!(Remote %in% coevo_metadata$run_accession))
+# Samples already downloaded in Taichi's project
+redundant_samplesfile = samplesfile %>% 
+  filter(Remote %in% coevo_metadata$run_accession)
+
+final_samplesfile %>% head
+```
+
+# Write files
+```{r}
+# Filtered data frame
+write_tsv(filtered_metadata, file.path(work_dir, "files/metadata", "Filtered_CurMetDat.tsv"))
+# Samples file
+write_tsv(final_samplesfile, file.path(work_dir, "files/sample_files", "Nonredundant_Samples.tsv"))
+```
+
+# Rank Studies by Available Metadata
+```{r}
+# Metadata of samples to download
+smps = final_samplesfile %>% 
+  pull(Sample) %>% 
+  unique()
+
+nonoverlap_metadata = filtered_metadata %>% 
+  filter(sampleID %in% smps)
+
+nonoverlap_metadata %>% head
+```
+
+I need to rank the metadata quality to prioritize studies to download. Given that I'm interested both in cardiometabolic health and westernization, I will prioritize both; the order of the studies will be given by whether (i) they contain non-westernized subjects (ii) whether they contain BMI, sex and age information (the more the better) (iii) the overall number of metadata available, regardless of their nature. 
+```{r}
+# Determine number of empty metadata fields in each study
+metadata_presence = nonoverlap_metadata %>% 
+  mutate(non_westernized = if_else(non_westernized == "yes", TRUE, NA)) %>% 
+  group_by(dataset_name) %>% 
+  summarise_all(.funs = function(x) as.numeric(!all(is.na(x)))) %>% 
+  ungroup() 
+
+metadata_presence %>% filter(non_westernized == 0)
+
+# The BMI from KarlssonFH_2013 can actually be obtained from the supplementary of the paper
+# Therefore I will manually add +1 to the score
+metadata_presence[metadata_presence$dataset_name == "KarlssonFH_2013", "BMI"] = 1
+  
+n_fields = metadata_presence %>%
+  gather(field, data_present, -dataset_name) %>% 
+  group_by(dataset_name) %>% 
+  summarise(n = sum(data_present))
+
+study_ranking = left_join(metadata_presence, n_fields) %>% 
+  arrange(-non_westernized, -BMI, -gender, -age, -n) %>% 
+  select(dataset_name, BMI, gender, age, non_westernized, n) %>% 
+  mutate(dataset_name = factor(dataset_name, levels = dataset_name),
+                               ranking = row_number())
+
+study_ranking
+```
+
+
+```{r}
+# Create a list with a df per study
+samples_split = nonoverlap_metadata %>% 
+  split(., factor(.$dataset_name))
+
+order_studies = levels(study_ranking$dataset_name)
+
+# Subset the samplesfile with one per study
+split_metadata = map(samples_split, function(x) filter(final_samplesfile, Sample %in% x$sampleID)) 
+  
+split_samplesfile = map(order_studies, function(x) pluck(split_metadata, x)) 
+
+split_names = glue::glue("{i}_{j}_samplefile.txt", 
+           i = str_pad(1:length(order_studies), pad = 0, width = 2 , "left"),
+           j = order_studies)
+
+map2(split_names, split_samplesfile,
+      .f = function(data_name, samplesfile)  write_tsv(samplesfile, file.path(work_dir, "files/sample_files", data_name)))
+```
+
+
+
+```{r}
+filtered_metadata %>% 
+  filter(str_detect(dataset_name, "YuJ_"))
+```
+
+# Session Info
+```{r}
+sessionInfo()
+```
+

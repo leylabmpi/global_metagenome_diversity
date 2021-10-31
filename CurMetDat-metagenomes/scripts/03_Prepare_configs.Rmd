@@ -1,0 +1,361 @@
+---
+title: "Run the LLMGQC pipeline"
+output: html_notebook
+---
+# Init
+```{r}
+library(tidyverse)
+library(glue)
+```
+
+# Var
+```{r}
+# Dirs
+work_dir = "/ebio/abt3_projects/databases_no-backup/curatedMetagenomicData/global_metagenomes"
+sample_files_folder = file.path(work_dir, "sample_files")
+config_QC_files = file.path(work_dir, "config_QC_files")
+pipeline_folder = "/ebio/abt3_projects/small_projects/jdelacuesta/CurMetDat/llmgqc"
+profile_folder = "/ebio/abt3_projects/small_projects/jdelacuesta/CurMetDat/llmgp"
+QC_dir = file.path(work_dir, "LLMGQC")
+unspring_dir = "/ebio/abt3_scratch/jdelacuesta/unspring/reads"
+profile_dir = file.path(work_dir, "LLMGP")
+config_profile_files = config_files = file.path(work_dir, "config_profile_files")
+
+# Files
+sample_files = list.files(sample_files_folder, full.names = T)
+sample_files = sample_files[str_detect(sample_files, "_samplefile.txt")]
+
+# Post-QC sample files 
+pQC_sample_files = list.files(QC_dir, full.names = T) %>% 
+  map_chr(., function(x) file.path(x, "final", "samples.txt"))
+
+# Unspring sample files 
+unspring_sample_files = list.files(unspring_dir, full.names = T) %>% 
+  map_chr(., function(x) file.path(x, "final", "samples.txt"))
+```
+
+# Prepare config file LLMGQC
+
+```{r}
+# Note that I will use only the forward read, as not all studies provide F and R files
+config_text = '
+#-- I/O --#
+# table with sample --> read_file information
+samples_file: {samples_file}
+
+# output location
+output_dir: {output_dir}
+
+# read file path
+# use "None" if full file path is included in the samples_file
+read_file_path: None
+
+#-- Software parameters --#
+# Use "Skip" to skip any of these steps. If no params for rule, use ""
+# `clumpify`: change dupedist if not HiSeq3000/4000 (dupedist=40 for NextSeq, HiSeq2500, and MiSeq)
+# `clumpify` (more info): this will likely fail for remote (SRA) samples
+# `use_prefetch`: If True, uses aspera connect prefetch (potentially faster download)
+# `remote`: If True, just download read1 (if remote file)
+# `skewer`: Make sure to change `-l` and `-q` as needed
+params:
+  # read download
+  use_prefetch: False
+  remote:
+    just_single: True
+    tmp_dir: /dev/shm
+  # validation, conversion, subsampling
+  validate_reads: ""
+  convert_fastq_to_1.8: ""
+  seqtk_sample: Skip    # Use number to subsample reads (eg., 1000000)
+  fastqc_on_raw: ""
+  # de-duplication
+  clumpify: Skip #dedupe=t dupedist=2500 optical=t
+  fastqc_on_dedup: ""
+  # adapter removal & quality trimming/filtering
+  bbduk: ref=./adapters/bbmap_adapters.fa fastawrap=300 k=23
+  skewer: -x ./adapters/PE_all.fa -n -l 80 -q 25
+  fastqc_on_qual: ""
+  # removal of contaminant reads
+  bbmap: minratio=0.9 maxindel=1 bwr=0.16 bw=12 fast minhits=2 qtrim=r trimq=10 untrim idtag printunmappedcount kfilter=25 maxsites=1 k=14 pairlen=1000 rescuedist=1000
+  ikraken2: Skip #/ebio/abt3_projects/databases_no-backup/kraken2/human_db/,/ebio/abt3_projects/databases_no-backup/kraken2/UniVec_Core_db/ --confidence 0.7
+  fastqc_on_filter: ""
+  # post-QC reads
+  fastqc_on_final: ""
+  # taxonomy
+  centrifuge: Skip
+  krona: Skip
+  # coverage
+  nonpareil: -T kmer
+  nonpareil_summary: 1e9      # target seq. depth
+  # master "Skip": reads combined then called "final" reads (skips all QC steps)
+  skip_all_QC: False
+
+#-- Databases --#
+## hg19 = human genome database for filtering out human reads
+filter_db: /ebio/abt3_projects/databases_no-backup/hg19/hg19
+# centrifuge db
+centrifuge_db: /ebio/abt3_projects/databases_no-backup/centrifuge/p+h+v
+# krona taxonomy db
+krona_tax_db: /ebio/abt3_projects/databases_no-backup/krona/taxonomy
+# kraken2 (see ikraken2 parameters)
+
+#-- Snakemake pipeline --#
+pipeline:
+  snakemake_folder: ./
+  script_folder: ./bin/scripts/
+  temp_folder: /tmp/global2/    # your username will be added automatically to this path
+  run_skip_locally: True        # trivial "skip" steps run locally (not qsub)
+'
+```
+
+```{r}
+Fill_config = function(samples, outdir){
+  out_path = basename(samples) %>%
+    str_remove("_samplefile.txt") %>% 
+    file.path(outdir,.)
+  glue(config_text, samples_file = samples, output_dir = out_path)
+}
+
+configs = map_chr(sample_files, function(x) Fill_config(x, QC_dir))
+
+keep(configs, function(x) str_detect(x, "Obregon")) %>% write_lines(., "/ebio/abt3_projects/small_projects/jdelacuesta/scratchpad/tstcon.txt")
+```
+
+
+## Write config files
+```{r}
+config_paths = basename(sample_files) %>%
+    str_replace("_samplefile.txt", "_config.txt") %>% 
+    file.path(config_QC_files, .)
+map2(configs, config_paths, function(x, y) write_lines(x, y)) 
+```
+
+## Snakemake command
+```{r}
+# Print config files path
+config_paths[26]
+```
+
+```{r}
+conda_env = 'source activate snakemake'
+SGE_out_dir = file.path(pipeline_folder, "tmp/SGE_out")
+QC_cmd = "cd {llmgqc}; {conda_env}; screen -L -S llmgqc {exe} {config} cluster.json {jobs} --keep-going --rerun-incomplete --dryrun"
+QC_job = glue(QC_cmd, 
+              conda_env = conda_env, 
+              llmgqc = pipeline_folder, 
+              exe = './snakemake_sge.sh', 
+              #SGE_out = SGE_out_dir, 
+              config = config_paths[29],
+              jobs = 30)
+QC_job 
+```
+
+# Prepare config file LLMGP
+
+```{r}
+# Note that I will use only the forward read, as not all studies provide F and R files
+config_profile_text = '
+# DESCRIPTION:
+## This is an example of running the pipeline with a custom humann2 db.
+## This config is set up to just use the custom nucleotide db, but the protein db could be used also (or instead)
+
+#-- I/O --#
+# table with sample --> read_file information
+samples_file: {samples_file}
+
+# output location
+output_dir: {output_dir}
+
+# read file path
+# use "None" if full file path is included in the samples_file
+read_file_path: None
+
+#-- DB --#
+## humann2 
+### custom humann2 databases
+humann2_nuc_db: /ebio/abt3_projects/databases_no-backup/GTDB/release89/LLMGP-DB/humann2/GTDBr89/all_genes_annot.fna.gz
+humann2_prot_db: /ebio/abt3_projects/databases_no-backup/GTDB/release89/LLMGP-DB/humann2/GTDBr89/all_genes_annot.dmnd
+### required humann2 database files (no need to change this)
+genefamily_annotation_db: /ebio/abt3_projects/databases_no-backup/humann2/utility_mapping/map_uniref50_name.txt.bz2
+metaphlan2_pkl_db: /ebio/abt3_projects/databases_no-backup/metaphlan2/mpa_v20_m200/mpa_v20_m200.pkl
+metaphlan2_bt2_db: /ebio/abt3_projects/databases_no-backup/metaphlan2/mpa_v20_m200/mpa_v20_m200     
+utility_mapping_db: /ebio/abt3_projects/databases_no-backup/humann2/utility_mapping
+## kraken/bracken (db selected automatically based on read length)
+kraken_dbs:
+  150bp: /ebio/abt3_projects/databases_no-backup/GTDB/release89/LLMGP-DB/kraken2/GTDBr89/database150mers.kraken
+  100bp: /ebio/abt3_projects/databases_no-backup/GTDB/release89/LLMGP-DB/kraken2/GTDBr89/database100mers.kraken
+### NCBI taxonomy
+tax_dump: /ebio/abt3_projects/databases_no-backup/GTDB/release89/taxdump/names.dmp
+
+#-- subsample --#
+# subsampling input reads 
+## "Skip" skips subsampling; otherwise set the number of reads to subsample
+subsample_depth: {subsample_depth}   
+subsample_seed: 18938
+
+#-- include read2 (if paired-end) --#
+# combine R1 & R2 or just use R1?
+include_read2: {include_read2}
+
+#-- humann2 temporary files --#
+# remove the large temporary files generated by humann2?
+rm_humann2_tmp_files: True      
+
+#-- humann2 groupings --#
+# always have at least the "*_default" grouping
+humann2_regroup:
+  - uniref50_default
+  - uniref50_go
+  - uniref50_ko
+  - uniref50_eggnog
+  - uniref50_pfam
+  - uniref50_level4ec
+  - uniref50_infogo1000
+  - uniref50_rxn
+
+#-- software parameters --#
+# Use "Skip" to skip steps.
+# By skipping, you can run just humann2, kraken/bracken, or simka
+params:
+  # humann2
+  metaphlan2: Skip # -t rel_ab  
+  humann2: --gap-fill on --bypass-nucleotide-index --diamond-2pass
+  humann2_db_in_memory: True        # copy databases to memory; less I/O, more memory
+  humann2_diamond: --sensitive --max-target-seqs 3 --block-size 4 --index-chunks 1
+  humann2_diamond_evalue: 0.001
+  reduce_taxonomic_profile: --function max --sort-by level
+  humann2_renorm_table: --units relab
+
+  # kraken/bracken (NOTE: dependent on read length)
+  kraken: Skip# ""
+  bracken: Skip # -t 100 -l S        # species level (S); `-r` parameter set automatically
+  # simka 
+  simka: -kmer-size 31 -abundance-min 2 -simple-dist -max-reads {subsample_depth}
+  simka_vis: -width 8 -height 8 -pca -heatmap
+  # hulk
+  hulk_histosketch: -k 21 -m 2
+  hulk_distance:
+    - jaccard
+    - braycurtis
+
+
+#-- snakemake pipeline --#
+pipeline:
+  snakemake_folder: ./
+  script_folder: ./bin/scripts/
+  temp_folder: /ebio/abt3_scratch/       # your username will be added automatically to this path
+'
+```
+
+## Samples file for Visconti and HuBif
+```{r}
+dir.create(file.path(unspring_dir, "34_HuBif/final"), recursive = T)
+dir.create(file.path(unspring_dir, "35_Visconti_2019/final"), recursive = T)
+```
+
+### HuBif
+```{r}
+# HuBif1
+HuBif1_dir = "/ebio/abt3_projects/HUBIF_metagenomics/llmgqc/LLMGQC_noconvert_output/final"
+HuBif2_dir = "/ebio/abt3_projects/HUBIF_metagenomics/llmgqc/LLMGQC_output_reseqs/final"
+
+HuBif_samplefiles = file.path(c(HuBif1_dir, HuBif2_dir), "samples.txt")
+
+HuBif_df_raw = map_df(HuBif_samplefiles, function(x) read_delim(x, delim = "\t")) 
+
+HuBif_df = HuBif_df_raw %>% 
+  select(-Read2) %>% 
+  filter(str_detect(Sample, "^[GTV]"), !str_detect(Sample, "saliva")) %>% 
+  mutate(Sample = str_remove(Sample, "\\_[0-9]$")) %>% 
+  arrange(Sample)
+
+# Combine tables and remove NAs
+HuBif_final = file.path(unspring_dir, "34_HuBif/final/samples.txt")
+write_delim(HuBif_df, path = HuBif_final, delim = "\t")
+```
+
+### Visconti
+```{r}
+# Visconti
+Visconti_dir = "/ebio/abt3_projects/databases_no-backup/TUK/metagenome/Visconti2019/LLMGQC/final"
+Visconti_samplefiles = file.path(Visconti_dir, "/samples.txt")
+
+Visconti_df_raw = map_df(Visconti_samplefiles, function(x) read_delim(x, delim = "\t"))
+
+Visconti_df = Visconti_df_raw %>% 
+  filter(!is.na(Read1)) %>% 
+  select(-Read2)
+
+Visconti_final = file.path(unspring_dir, "35_Visconti_2019/final/samples.txt")
+write_delim(Visconti_df, path = Visconti_final, delim = "\t")
+```
+
+```{r}
+#Taichi's eco-evo
+ecoevo_dir = "/ebio/abt3_projects/databases_no-backup/Taichi_h-m-coevo/LLMGQC"
+ecoevo_samplefiles = list.files(ecoevo_dir, recursive = F) %>% 
+  .[str_which(., "PRJ")] %>% 
+  file.path(ecoevo_dir, ., "final/samples.txt")
+
+ecoevo_df_raw = map_df(ecoevo_samplefiles, function(x) read_delim(x, delim = "\t"))
+
+ecoevo_df = ecoevo_df_raw %>% 
+  select(-Read2)
+
+ecoevo_df %>% head
+
+ecoevo_final = file.path(unspring_dir, "36_EcoEvo/final/samples.txt")
+write_delim(ecoevo_df, path = ecoevo_final, delim = "\t")
+```
+
+## Fill config file
+```{r}
+# Config for taxonomic profile
+Fill_config_profile = function(samples, outdir){
+  out_path = samples %>%
+    str_remove("/ebio/abt3_scratch/jdelacuesta/unspring/reads/") %>% 
+    str_remove("/final/samples.txt") %>% 
+    file.path(outdir,.)
+  glue(config_profile_text, samples_file = samples, output_dir = out_path, subsample_depth = "1000000", include_read2 = "False")
+}
+
+configs_profile = map_chr(unspring_sample_files, function(x) Fill_config_profile(x, profile_dir))
+
+keep(configs_profile, function(x) str_detect(x, "Obregon")) %>% write_lines(., "/ebio/abt3_projects/small_projects/jdelacuesta/scratchpad/tstcon.txt")
+```
+
+## Write config files
+```{r}
+config_profile_paths = unspring_sample_files %>%
+    str_remove("/ebio/abt3_scratch/jdelacuesta/unspring/reads/") %>% 
+    str_remove("/final/samples.txt") %>% 
+    str_c("_config.txt") %>% 
+    file.path(config_profile_files, .)
+map2(configs_profile, config_profile_paths, function(x, y) write_lines(x, y)) 
+```
+
+## Snakemake command
+```{r}
+# Print config files path
+config_profile_paths[34]
+```
+
+```{r}
+conda_env = 'source activate snakemake'
+profile_cmd = "cd {llmgp}; {conda_env}; screen -L -S llmgp_functional {exe} {config} {jobs} --keep-going --rerun-incomplete --dryrun"
+profile_job = glue(profile_cmd, 
+              conda_env = conda_env, 
+              llmgp = profile_folder, 
+              exe = './snakemake_sge.sh', 
+              config = config_profile_paths[34],
+              jobs = 30)
+profile_job 
+```
+
+# Run all 
+
+# Session Info
+```{r}
+sessionInfo()
+```
+

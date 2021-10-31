@@ -1,0 +1,62 @@
+#-- I/O --#
+# table with sample --> read_file information
+#samples_file: /ebio/abt3_projects/databases_no-backup/Taichi_h-m-coevo/LLMGQC/PRJEB4336/samples.txt
+samples_file: /ebio/abt3_projects/databases_no-backup/Taichi_h-m-coevo/LLMGQC/PRJEB4336/samples_n3.txt
+
+# output location
+output_dir: /ebio/abt3_projects/databases_no-backup/Taichi_h-m-coevo/LLMGQC/PRJEB4336/
+
+# read file path
+# use "None" if full file path is included in the samples_file
+read_file_path: None
+
+#-- Software parameters --#
+# Use "Skip" to skip any of these steps. If no params for rule, use ""
+# `clumpify`: change dupedist if not HiSeq3000/4000 (dupedist=40 for NextSeq, HiSeq2500, and MiSeq)
+params:
+  # read download
+  use_prefetch: False
+  remote: just_single=False      # If True, just download read1 (if remote file)
+  # validation, conversion, subsampling
+  validate_reads: ""
+  convert_fastq_to_1.8: ""
+  seqtk_sample: Skip    # Use number to subsample reads (eg., 1000000)
+  fastqc_on_raw: ""
+  # de-duplication
+  clumpify: Skip #dedupe=t dupedist=2500 optical=t    # this will likely fail for remote (SRA) samples
+  fastqc_on_dedup: ""
+  # adapter removal & quality trimming/filtering
+  bbduk: ref=./adapters/bbmap_adapters.fa fastawrap=300 k=23
+  skewer: -x ./adapters/PE_all.fa -n -l 80 -q 25
+  fastqc_on_qual: ""
+  # removal of 'contaminant' reads
+  bbmap: minratio=0.9 maxindel=1 bwr=0.16 bw=12 fast minhits=2 qtrim=r trimq=10 untrim idtag printunmappedcount kfilter=25 maxsites=1 k=14 pairlen=1000 rescuedist=1000
+  ikraken2: Skip # /ebio/abt3_projects/databases_no-backup/kraken2/human_db/,/ebio/abt3_projects/databases_no-backup/kraken2/UniVec_Core_db/ --confidence 0.7
+  fastqc_on_filter: ""
+  # post-QC reads
+  fastqc_on_final: ""
+  # taxonomy
+  centrifuge: Skip
+  krona: Skip
+  # coverage
+  nonpareil: -T kmer
+  nonpareil_summary: 1e9   # this is target seq. depth
+  # master "Skip": reads combined then called "final" reads (skips all QC steps)
+  skip_all_QC: False
+
+#-- Databases --#
+## hg19 = human genome database for filtering out human reads
+filter_db: /ebio/abt3_projects/databases_no-backup/hg19/hg19
+# centrifuge db
+centrifuge_db: /ebio/abt3_projects/databases_no-backup/centrifuge/p+h+v
+# krona taxonomy db
+krona_tax_db: /ebio/abt3_projects/databases_no-backup/krona/taxonomy
+# kraken2 (see 'ikraken2' parameters)
+
+#-- Snakemake pipeline --#
+## To use /tmp/global2/, see http://ilm.eb.local/user-guide/#Scratch-space-on-_002ftmp_002fglobal2
+pipeline:
+  snakemake_folder: ./
+  script_folder: ./bin/scripts/
+  temp_folder: /tmp/global/    # your username will be added automatically to this path
+  run_skip_locally: True       # trivial "skip" steps run locally (not qsub)

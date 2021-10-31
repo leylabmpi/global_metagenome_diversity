@@ -22,4 +22,11 @@ The data can then be formated and used with the Ley Lab Metagenome QC pipeline `
 
 ## Data analyses
 
-See ./ipynb/ for Jupyter notebooks 
+* `./ipynb/01_data_explore/`
+  * Initial exploration, pre-processing, and formatting of the data
+* `./ipynb/02_comm_diversity/`
+  * Main assessments of community diversity
+* `./ipynb/03_ML/`
+  * All machine learning analyses
+* `./ipynb/04_tutorial/`
+  * Tutorials on calculating diversity measures
