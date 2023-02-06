@@ -2,7 +2,7 @@
 
 Code and notes associated with the study:
 
-> Nicholas D. Youngblut, Jacobo de la Cuesta-Zuluaga, Ruth E. Ley. Incorporating genome-based phylogeny and functional similarity into diversity assessments helps to resolve a global collection of human gut metagenomes. bioRxiv. https://doi.org/10.1101/2020.07.16.207845
+> Youngblut, Nicholas D., Jacobo de la Cuesta‐Zuluaga, and Ruth E. Ley. "Incorporating genome‐based phylogeny and functional similarity into diversity assessments helps to resolve a global collection of human gut metagenomes." Environmental microbiology 24.9 (2022): 3966-3984. http://dx.doi.org/10.1111/1462-2920.15910
 
 ## Data retrieval
 
